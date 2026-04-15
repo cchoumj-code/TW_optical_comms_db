@@ -115,10 +115,14 @@ if __name__ == "__main__":
     success = 0
     for filepath in sorted(md_files):
         try:
-            metrics = parse_md_file(filepath)
-            update_supabase(metrics)
-            success += 1
-        except Exception as e:
-            print(f"  {filepath.name}: ERROR — {e}")
-
+            data = parse_md_file(filepath)
+            ticker = data["ticker"]
+            print(f"\n{ticker} ({filepath.name})")
+            print(f"  Years: {data['annual']['years']}")
+            print(f"  Quarters: {data['quarterly']['quarters']}")
+            print(f"  Revenue: {data['annual']['revenue']}")
+            print(f"  Gross margin: {data['annual']['gross_margin']}")
+            update_stock_data(ticker, data["summary"])
+            upsert_financials(ticker, data["annual"], data["quarterly"])
+    
     print(f"\nDone. Updated {success}/{len(md_files)} companies.")
