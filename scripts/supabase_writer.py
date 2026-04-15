@@ -1,7 +1,6 @@
 """
 push_financials_to_supabase.py
-Reads financial data from .md files and pushes to Supabase.
-Parses both valuation metrics AND financial statements.
+Parses .md files with aligned markdown tables and pushes to Supabase.
 """
 
 import os
@@ -20,96 +19,70 @@ def headers():
     }
 
 def clean_num(val):
-    """Convert string like '59.9%' or '3,809,054' to float."""
-    if not val or val.strip() in ("N/A", "—", "-", ""):
+    """Convert '59.9%' or '3,809,054' or '1855' to float."""
+    if not val:
         return None
-    val = val.strip().replace(",", "").replace("%", "")
+    val = val.strip().replace(",", "").replace("%", "").replace(" ", "")
+    if val in ("N/A", "—", "-", ""):
+        return None
     try:
         return float(val)
     except:
         return None
 
-def parse_table_row(content, row_label):
+def parse_section(content, section_header):
     """
-    Extract all numeric values from a markdown table row.
-    Returns list of floats for each column found.
-    e.g. "Gross Margin 毛利率 | 59.9% | 56.1% | 54.4%"
-    returns [59.9, 56.1, 54.4]
+    Extract a markdown table section by header name.
+    Returns list of {col_header: value} dicts, one per data row.
+    Handles aligned tables with extra spaces.
     """
-    pattern = rf"\|\s*{re.escape(row_label)}[^|]*\|([^|\n]+(?:\|[^|\n]+)*)\|?"
+    # Find the section
+    pattern = rf"###\s*{re.escape(section_header)}[^\n]*\n"
     match = re.search(pattern, content)
     if not match:
-        return []
-    cells = match.group(1).split("|")
-    return [clean_num(c) for c in cells if c.strip()]
+        return [], []
 
-def parse_valuation(content):
-    """Parse valuation metrics table."""
-    def get_val(label):
-        vals = parse_table_row(content, label)
-        return vals[0] if vals else None
+    section_start = match.end()
+    # Get lines until next ### or ##
+    remaining = content[section_start:]
+    lines = []
+    for line in remaining.split("\n"):
+        if line.startswith("##"):
+            break
+        lines.append(line)
 
-    return {
-        "pe_ttm":     get_val("P/E Ratio (TTM)"),
-        "pe_forward": get_val("Forward P/E"),
-        "ps_ttm":     get_val("Price-to-Sales (TTM)"),
-        "pb":         get_val("Price-to-Book"),
-        "ev_ebitda":  get_val("EV/EBITDA"),
-    }
+    # Parse table
+    table_lines = [l for l in lines if l.strip().startswith("|")]
+    if len(table_lines) < 3:
+        return [], []
 
-def parse_annual(content):
-    """Parse annual financials — returns dict with lists of 3 years."""
-    # Find year headers
-    year_match = re.search(
-        r"Annual Financials[^\n]*\n[^\n]*\n[^\n]*\|\s*(\d{4})\s*\|\s*(\d{4})\s*\|\s*(\d{4})",
-        content
-    )
-    years = []
-    if year_match:
-        years = [year_match.group(1), year_match.group(2), year_match.group(3)]
-    else:
-        years = ["Y1", "Y2", "Y3"]
+    # Header row — extract column names
+    header_cells = [c.strip() for c in table_lines[0].split("|") if c.strip()]
+    # Skip separator row (table_lines[1])
+    # Data rows
+    data_rows = []
+    for line in table_lines[2:]:
+        cells = [c.strip() for c in line.split("|")]
+        # Remove empty first/last from leading/trailing |
+        cells = [c for i, c in enumerate(cells) if not (i == 0 and c == "")]
+        if len(cells) < 2:
+            continue
+        row = {}
+        for i, col in enumerate(header_cells):
+            if i < len(cells):
+                row[col] = cells[i]
+        data_rows.append(row)
 
-    return {
-        "years":          years,
-        "revenue":        parse_table_row(content, "Revenue 營收 (TWD M)"),
-        "gross_profit":   parse_table_row(content, "Gross Profit 毛利 (TWD M)"),
-        "op_income":      parse_table_row(content, "Operating Income 營業利益 (TWD M)"),
-        "net_income":     parse_table_row(content, "Net Income 淨利 (TWD M)"),
-        "gross_margin":   parse_table_row(content, "Gross Margin 毛利率"),
-        "op_margin":      parse_table_row(content, "Operating Margin 營益率"),
-        "net_margin":     parse_table_row(content, "Net Margin 淨利率"),
-    }
+    return header_cells, data_rows
 
-def parse_quarterly(content):
-    """Parse quarterly financials — returns dict with lists of 4 quarters."""
-    # Find quarter headers like 2025-12
-    q_match = re.search(
-        r"Quarterly Financials[^\n]*\n[^\n]*\n[^\n]*\|\s*(\d{4}-\d{2})\s*\|\s*(\d{4}-\d{2})\s*\|\s*(\d{4}-\d{2})\s*\|\s*(\d{4}-\d{2})",
-        content
-    )
-    quarters = []
-    if q_match:
-        quarters = [q_match.group(i) for i in range(1, 5)]
-    else:
-        quarters = ["Q1", "Q2", "Q3", "Q4"]
-
-    # Find quarterly section only (after "Quarterly Financials")
-    q_section = content
-    q_start = content.find("Quarterly Financials")
-    if q_start > 0:
-        q_section = content[q_start:]
-
-    return {
-        "quarters":     quarters,
-        "revenue":      parse_table_row(q_section, "Revenue 營收 (TWD M)"),
-        "gross_profit": parse_table_row(q_section, "Gross Profit 毛利 (TWD M)"),
-        "op_income":    parse_table_row(q_section, "Operating Income 營業利益 (TWD M)"),
-        "net_income":   parse_table_row(q_section, "Net Income 淨利 (TWD M)"),
-        "gross_margin": parse_table_row(q_section, "Gross Margin 毛利率"),
-        "op_margin":    parse_table_row(q_section, "Operating Margin 營益率"),
-        "net_margin":   parse_table_row(q_section, "Net Margin 淨利率"),
-    }
+def get_val(rows, label_contains):
+    """Find first row whose first column contains label, return all numeric values."""
+    for row in rows:
+        first_col = list(row.keys())[0] if row else ""
+        first_val = list(row.values())[0] if row else ""
+        if label_contains.lower() in first_val.lower():
+            return [clean_num(v) for k, v in list(row.items())[1:]]
+    return []
 
 def parse_md_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
@@ -117,35 +90,85 @@ def parse_md_file(filepath):
 
     ticker = Path(filepath).stem.split("_")[0]
 
-    val     = parse_valuation(content)
-    annual  = parse_annual(content)
-    quarterly = parse_quarterly(content)
+    # ── Valuation ──────────────────────────────────────────
+    _, val_rows = parse_section(content, "Valuation Metrics")
 
-    # Most recent year margins for stock_data quick access
-    gm = annual["gross_margin"][0] if annual["gross_margin"] else None
-    om = annual["op_margin"][0]    if annual["op_margin"]    else None
-    nm = annual["net_margin"][0]   if annual["net_margin"]   else None
-    rv = annual["revenue"][0]      if annual["revenue"]      else None
+    def get_single(rows, label):
+        for row in rows:
+            vals = list(row.values())
+            if len(vals) >= 2 and label.lower() in vals[0].lower():
+                return clean_num(vals[1])
+        return None
+
+    valuation = {
+        "pe_ttm":     get_single(val_rows, "P/E Ratio (TTM)"),
+        "pe_forward": get_single(val_rows, "Forward P/E"),
+        "ps_ttm":     get_single(val_rows, "Price-to-Sales"),
+        "pb":         get_single(val_rows, "Price-to-Book"),
+        "ev_ebitda":  get_single(val_rows, "EV/EBITDA"),
+    }
+
+    # ── Annual Financials ──────────────────────────────────
+    ann_cols, ann_rows = parse_section(content, "Annual Financials")
+    years = [c for c in ann_cols[1:] if c] if len(ann_cols) > 1 else []
+
+    def get_annual(label):
+        return get_val(ann_rows, label)
+
+    annual = {
+        "years":        years,
+        "revenue":      get_annual("Revenue"),
+        "gross_profit": get_annual("Gross Profit"),
+        "op_income":    get_annual("Operating Income"),
+        "net_income":   get_annual("Net Income"),
+        "gross_margin": get_annual("Gross Margin"),
+        "op_margin":    get_annual("Operating Margin"),
+        "net_margin":   get_annual("Net Margin"),
+    }
+
+    # ── Quarterly Financials ───────────────────────────────
+    # Find quarterly section specifically
+    q_start = content.find("### Quarterly Financials")
+    q_content = content[q_start:] if q_start >= 0 else content
+
+    q_cols, q_rows = parse_section(q_content, "Quarterly Financials")
+    quarters = [c for c in q_cols[1:] if c] if len(q_cols) > 1 else []
+
+    def get_quarterly(label):
+        return get_val(q_rows, label)
+
+    quarterly = {
+        "quarters":     quarters,
+        "revenue":      get_quarterly("Revenue"),
+        "gross_profit": get_quarterly("Gross Profit"),
+        "op_income":    get_quarterly("Operating Income"),
+        "net_income":   get_quarterly("Net Income"),
+        "gross_margin": get_quarterly("Gross Margin"),
+        "op_margin":    get_quarterly("Operating Margin"),
+        "net_margin":   get_quarterly("Net Margin"),
+    }
+
+    # Latest year summary for stock_data
+    summary = {
+        **valuation,
+        "gross_margin": annual["gross_margin"][0] if annual["gross_margin"] else None,
+        "op_margin":    annual["op_margin"][0]    if annual["op_margin"]    else None,
+        "net_margin":   annual["net_margin"][0]   if annual["net_margin"]   else None,
+        "revenue":      annual["revenue"][0]      if annual["revenue"]      else None,
+    }
 
     return {
-        "ticker":    ticker,
-        "valuation": val,
-        "annual":    annual,
-        "quarterly": quarterly,
-        "summary": {
-            "gross_margin": gm,
-            "op_margin":    om,
-            "net_margin":   nm,
-            "revenue":      rv,
-            **val,
-        }
+        "ticker":     ticker,
+        "valuation":  valuation,
+        "annual":     annual,
+        "quarterly":  quarterly,
+        "summary":    summary,
     }
 
 def update_stock_data(ticker, summary):
-    """Update stock_data with valuation + latest margin summary."""
     clean = {k: v for k, v in summary.items() if v is not None}
     if not clean:
-        print(f"  {ticker}: no summary metrics — skipping")
+        print(f"  {ticker}: no summary metrics")
         return
     url = f"{SUPABASE_URL}/rest/v1/stock_data?ticker=eq.{ticker}"
     r = requests.patch(
@@ -153,41 +176,41 @@ def update_stock_data(ticker, summary):
         headers={**headers(), "Prefer": "return=minimal"},
         json=clean
     )
-    print(f"  {ticker}: stock_data updated → {r.status_code}")
+    print(f"  {ticker}: stock_data → {r.status_code} ({len(clean)} fields)")
 
 def upsert_financials(ticker, annual, quarterly):
-    """Write full annual + quarterly data to company_financials table."""
     rows = []
 
-    # Annual rows
     for i, year in enumerate(annual["years"]):
         row = {"ticker": ticker, "period": year, "period_type": "annual"}
-        for metric in ["revenue","gross_profit","op_income","net_income",
-                       "gross_margin","op_margin","net_margin"]:
-            vals = annual.get(metric, [])
-            row[metric] = vals[i] if i < len(vals) else None
+        for m in ["revenue","gross_profit","op_income","net_income",
+                  "gross_margin","op_margin","net_margin"]:
+            vals = annual.get(m, [])
+            row[m] = vals[i] if i < len(vals) else None
         rows.append(row)
 
-    # Quarterly rows
     for i, quarter in enumerate(quarterly["quarters"]):
         row = {"ticker": ticker, "period": quarter, "period_type": "quarterly"}
-        for metric in ["revenue","gross_profit","op_income","net_income",
-                       "gross_margin","op_margin","net_margin"]:
-            vals = quarterly.get(metric, [])
-            row[metric] = vals[i] if i < len(vals) else None
+        for m in ["revenue","gross_profit","op_income","net_income",
+                  "gross_margin","op_margin","net_margin"]:
+            vals = quarterly.get(m, [])
+            row[m] = vals[i] if i < len(vals) else None
         rows.append(row)
 
     if not rows:
+        print(f"  {ticker}: no financial rows to insert")
         return
 
-    # Delete existing rows for this ticker then reinsert
     requests.delete(
         f"{SUPABASE_URL}/rest/v1/company_financials?ticker=eq.{ticker}",
         headers=headers()
     )
-    url = f"{SUPABASE_URL}/rest/v1/company_financials"
-    r = requests.post(url, headers=headers(), json=rows)
-    print(f"  {ticker}: financials upserted ({len(rows)} rows) → {r.status_code}")
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/company_financials",
+        headers=headers(),
+        json=rows
+    )
+    print(f"  {ticker}: financials → {r.status_code} ({len(rows)} rows)")
 
 if __name__ == "__main__":
     print("\n=== Push Financials to Supabase ===\n")
@@ -196,20 +219,28 @@ if __name__ == "__main__":
         print("ERROR: Set SUPABASE_URL and SUPABASE_ANON_KEY")
         exit(1)
 
+    # Find .md files — check root first, then subfolder
     md_files = list(Path(".").glob("*.md"))
     if not md_files:
-        md_files = list(Path("Pilot_Reports/Optical_Communications").glob("*.md"))
+        sub = Path("Pilot_Reports/Optical_Communications")
+        if sub.exists():
+            md_files = list(sub.glob("*.md"))
 
     print(f"Found {len(md_files)} .md files\n")
+    if not md_files:
+        print("ERROR: No .md files found")
+        exit(1)
 
     for filepath in sorted(md_files):
         try:
             data = parse_md_file(filepath)
             ticker = data["ticker"]
-            print(f"Processing {ticker}...")
+            print(f"\n{ticker} ({filepath.name})")
             update_stock_data(ticker, data["summary"])
             upsert_financials(ticker, data["annual"], data["quarterly"])
         except Exception as e:
-            print(f"  {filepath.name}: ERROR — {e}")
+            import traceback
+            print(f"  ERROR: {e}")
+            traceback.print_exc()
 
-    print("\nDone.")
+    print("\n=== Done ===")
