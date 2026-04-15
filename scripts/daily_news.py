@@ -355,4 +355,34 @@ if __name__ == "__main__":
     earnings     = get_earnings_digest()
     supply_chain = get_supply_chain_alerts()
     push_to_notion(sector_news, earnings, supply_chain)
+    
+    # Add this block right before print("\nDone.") in daily_news.py
+# after the push_to_notion() call:
+
+    # Write news to Supabase
+    from supabase_writer import write_news, log_pipeline
+
+    news_rows = []
+    for item in all_sector_news:
+        news_rows.append({
+            "title":        item.get("title", ""),
+            "source":       item.get("source", ""),
+            "lang":         item.get("lang", "EN"),
+            "category":     "sector",
+            "published_at": item.get("date", today),
+            "link":         item.get("link", ""),
+        })
+
+    write_news(news_rows)
+    log_pipeline("Daily News", "success", f"{len(news_rows)} items fetched")
+
+# NOTE: You also need to save all_sector_news + all_earnings + all_supply_chain
+# as a combined list before calling push_to_notion().
+# Easiest way: in get_sector_news(), return both the formatted string AND the raw list:
+#
+# return formatted_string, all_headlines
+#
+# Then in main():
+# sector_news_str, all_sector_news = get_sector_news()
+    
     print("\nDone.")
