@@ -210,7 +210,7 @@ def get_sector_news():
         for h in zh_news:
             lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
 
-    return "\n".join(lines)
+    return "\n".join(lines), all_headlines
 
 # ── Earnings detection ────────────────────────────────────
 def get_earnings_digest():
@@ -351,7 +351,7 @@ def push_to_notion(sector_news, earnings, supply_chain):
 # ── Main ───────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"\n=== Daily News Pipeline (Free) — {today} ===\n")
-    sector_news  = get_sector_news()
+    sector_news, all_sector_news = get_sector_news()
     earnings     = get_earnings_digest()
     supply_chain = get_supply_chain_alerts()
     push_to_notion(sector_news, earnings, supply_chain)
