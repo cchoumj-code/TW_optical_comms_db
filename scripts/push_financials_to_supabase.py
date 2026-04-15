@@ -103,7 +103,7 @@ if __name__ == "__main__":
         exit(1)
 
     # Find all .md files
-    reports_dir = Path("Pilot_Reports/Optical_Communications")
+    reports_dir = Path(".")
     if not reports_dir.exists():
         print(f"ERROR: {reports_dir} not found")
         print("Run this script from the root of your GitHub repo")
