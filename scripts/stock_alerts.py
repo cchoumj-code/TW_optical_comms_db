@@ -232,4 +232,32 @@ if __name__ == "__main__":
         subject = f"[CPO Portfolio] {len(alerts)} alert(s) — {today}"
         send_email(subject, report)
 
+# Add this import at the top of stock_alerts.py:
+# from supabase_writer import write_stocks, log_pipeline
+
+# Add this block right before print("\nDone.") at the bottom:
+
+    # Write all stock data to Supabase
+    stock_rows = []
+    for r in results:
+        stock_rows.append({
+            "ticker":     r["ticker"],
+            "name_cn":    r["name_cn"],
+            "name_en":    r["name_en"],
+            "tier":       r["role"].split("—")[0].strip() if "—" in r["role"] else r["role"],
+            "price":      round(r["price"], 2) if r["price"] else None,
+            "change_1d":  round(r["pct_1d"], 2) if r.get("pct_1d") else None,
+            "change_1w":  round(r["pct_1w"], 2) if r.get("pct_1w") else None,
+            "rsi":        round(r["rsi"], 1) if r.get("rsi") else None,
+            "ma20":       round(r["ma20"], 2) if r.get("ma20") else None,
+            "ma50":       round(r["ma50"], 2) if r.get("ma50") else None,
+            "vol_ratio":  round(r["vol_ratio"], 2) if r.get("vol_ratio") else None,
+            "signals":    r["signals"],
+            "updated_at": date.today().isoformat(),
+        })
+
+    from supabase_writer import write_stocks, log_pipeline
+    write_stocks(stock_rows)
+    log_pipeline("Stock Alerts", "success", f"{len(alerts)} alerts triggered")
+    
     print("\nDone.")
