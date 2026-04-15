@@ -44,5 +44,12 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python scripts/stock_alerts.py
 
+      - name: Push financials to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python scripts/push_financials_to_supabase.py
+
       - name: Done
         run: echo "Pipeline completed on $(date)"
+
