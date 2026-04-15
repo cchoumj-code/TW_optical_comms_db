@@ -351,19 +351,59 @@ def push_to_notion(sector_news, earnings, supply_chain):
 # ── Main ───────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"\n=== Daily News Pipeline (Free) — {today} ===\n")
-    sector_news, all_sector_news = get_sector_news()
+
+    all_headlines = []
+    seen = set()
+    en_news = []
+    zh_news = []
+
+    print("Scanning sector news (English + Chinese sources)...")
+    for query in SECTOR_QUERIES_EN:
+        for item in search_google_news_rss(query, max_results=3, lang="en"):
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                item["lang"] = "EN"
+                en_news.append(item)
+                all_headlines.append(item)
+
+    for query in SECTOR_QUERIES_ZH:
+        for item in search_google_news_rss(query, max_results=3, lang="zh"):
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                item["lang"] = "ZH"
+                zh_news.append(item)
+                all_headlines.append(item)
+
+    print("  Fetching Chinese financial sources...")
+    for feed in CHINESE_RSS_FEEDS:
+        print(f"    -> {feed['name']}")
+        for item in fetch_chinese_rss(feed, max_results=5):
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                item["lang"] = "ZH"
+                zh_news.append(item)
+                all_headlines.append(item)
+
+    lines = [f"**Sector News — CPO & Silicon Photonics ({today})**\n"]
+    if en_news:
+        lines.append("-- English Sources --")
+        for h in en_news[:8]:
+            lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
+    if zh_news:
+        lines.append("\n-- Chinese Sources --")
+        for h in zh_news[:10]:
+            lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
+    sector_news = "\n".join(lines)
+
     earnings     = get_earnings_digest()
     supply_chain = get_supply_chain_alerts()
-    push_to_notion(sector_news, earnings, supply_chain)
-    
-    # Add this block right before print("\nDone.") in daily_news.py
-# after the push_to_notion() call:
 
-    # Write news to Supabase
+    push_to_notion(sector_news, earnings, supply_chain)
+
     from supabase_writer import write_news, log_pipeline
 
     news_rows = []
-    for item in all_sector_news:
+    for item in all_headlines:
         news_rows.append({
             "title":        item.get("title", ""),
             "source":       item.get("source", ""),
@@ -373,16 +413,28 @@ if __name__ == "__main__":
             "link":         item.get("link", ""),
         })
 
+    for query in [
+        "CPO supply chain win design Taiwan",
+        "上詮 SENKO customer order",
+        "聯亞 LiquidCool InP capacity",
+        "光聖 Radiant Opto Google contract",
+        "智邦 Accton NVIDIA switch",
+        "TSMC COUPE silicon photonics production",
+    ]:
+        for item in search_google_news_rss(query, max_results=3):
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                news_rows.append({
+                    "title":        item.get("title", ""),
+                    "source":       item.get("source", ""),
+                    "lang":         "EN",
+                    "category":     "supply_chain",
+                    "published_at": item.get("date", today),
+                    "link":         item.get("link", ""),
+                })
+
     write_news(news_rows)
     log_pipeline("Daily News", "success", f"{len(news_rows)} items fetched")
 
-# NOTE: You also need to save all_sector_news + all_earnings + all_supply_chain
-# as a combined list before calling push_to_notion().
-# Easiest way: in get_sector_news(), return both the formatted string AND the raw list:
-#
-# return formatted_string, all_headlines
-#
-# Then in main():
-# sector_news_str, all_sector_news = get_sector_news()
-    
+    print(f"\nTotal news items: {len(news_rows)}")
     print("\nDone.")
