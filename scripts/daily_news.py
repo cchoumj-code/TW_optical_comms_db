@@ -1,12 +1,10 @@
 """
 daily_news.py — FREE VERSION (no Anthropic API needed)
-Uses DuckDuckGo search + RSS feeds to pull news.
-Runs daily via GitHub Actions.
-Pushes digest to Notion page.
+Uses Google News RSS + Chinese RSS feeds to pull news.
+Runs daily via GitHub Actions. Pushes to Supabase.
 """
 
 import requests
-import json
 import os
 from datetime import date, timedelta
 from xml.etree import ElementTree as ET
@@ -38,7 +36,7 @@ COMPANIES = [
 ]
 
 SECTOR_QUERIES_EN = [
-    "CPO co-packaged optics Taiwan 2025",
+    "CPO co-packaged optics Taiwan 2026",
     "silicon photonics Taiwan supply chain",
     "TSMC COUPE optical",
     "NVIDIA Rubin optical interconnect",
@@ -53,76 +51,58 @@ SECTOR_QUERIES_ZH = [
     "光纖 AI伺服器 台灣廠商",
 ]
 
-# Credible Chinese-language RSS sources
 CHINESE_RSS_FEEDS = [
-    {
-        "name": "經濟日報 (UDN Economy)",
-        "url": "https://money.udn.com/rssfeed/news/1/5607?ch=money",  # Tech/stocks
-    },
-    {
-        "name": "中央社 (CNA)",
-        "url": "https://www.cna.com.tw/RSS/fnc.xml",  # Finance & economy
-    },
-    {
-        "name": "工商時報 (CTEE)",
-        "url": "https://ctee.com.tw/feed",
-    },
-    {
-        "name": "鉅亨網 (Anue)",
-        "url": "https://news.cnyes.com/api/v3/news/category/tw_stock/latest?limit=30",
-        "is_json": True,  # Anue uses JSON API not XML
-    },
+    {"name": "經濟日報", "url": "https://money.udn.com/rssfeed/news/1/5607?ch=money"},
+    {"name": "中央社",   "url": "https://www.cna.com.tw/RSS/fnc.xml"},
+    {"name": "工商時報", "url": "https://ctee.com.tw/feed"},
+    {"name": "鉅亨網",   "url": "https://news.cnyes.com/api/v3/news/category/tw_stock/latest?limit=30", "is_json": True},
 ]
 
-# Keywords to filter Chinese articles for relevance
 RELEVANCE_KEYWORDS = [
-    "光通訊", "矽光子", "CPO", "共封裝", "光收發", "磊晶",
-    "上詮", "聯亞", "波若威", "光聖", "穩懋", "智邦", "台積電",
-    "800G", "1.6T", "InP", "光纖", "AI伺服器", "光引擎",
-    "3081", "3363", "3163", "6442", "2345", "2330",
+    "光通訊","矽光子","CPO","共封裝","光收發","磊晶",
+    "上詮","聯亞","波若威","光聖","穩懋","智邦","台積電",
+    "800G","1.6T","InP","光纖","AI伺服器","光引擎",
+    "3081","3363","3163","6442","2345","2330",
 ]
 
-# ── Google News RSS (English) ──────────────────────────────
+SC_QUERIES = [
+    "CPO supply chain win design Taiwan",
+    "上詮 SENKO customer order",
+    "聯亞 LiquidCool InP capacity",
+    "光聖 Radiant Opto Google contract",
+    "智邦 Accton NVIDIA switch",
+    "TSMC COUPE silicon photonics production",
+]
+
 def search_google_news_rss(query, max_results=5, lang="en"):
-    """Pull headlines from Google News RSS — completely free."""
     encoded = urllib.parse.quote(query)
     if lang == "zh":
         url = f"https://news.google.com/rss/search?q={encoded}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     else:
         url = f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
     try:
-        r = requests.get(url, timeout=10,
-                         headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200:
             return []
         root = ET.fromstring(r.content)
-        items = root.findall(".//item")[:max_results]
         results = []
-        for item in items:
+        for item in root.findall(".//item")[:max_results]:
             title   = item.findtext("title", "").split(" - ")[0].strip()
             source  = item.findtext("title", "").split(" - ")[-1].strip()
             pubdate = item.findtext("pubDate", "")[:16]
             link    = item.findtext("link", "")
-            results.append({
-                "title": title, "source": source,
-                "date": pubdate, "link": link,
-            })
+            results.append({"title": title, "source": source, "date": pubdate, "link": link})
         return results
     except Exception as e:
-        print(f"  RSS error for '{query}': {e}")
+        print(f"  RSS error '{query}': {e}")
         return []
 
-# ── Chinese RSS feed scraper ───────────────────────────────
 def fetch_chinese_rss(feed, max_results=8):
-    """Fetch and filter articles from Chinese financial news RSS feeds."""
     results = []
     try:
-        headers = {"User-Agent": "Mozilla/5.0",
-                   "Accept": "application/rss+xml, application/xml, text/xml, */*"}
-
-        # Anue uses JSON API
+        hdrs = {"User-Agent": "Mozilla/5.0", "Accept": "application/rss+xml, */*"}
         if feed.get("is_json"):
-            r = requests.get(feed["url"], timeout=10, headers=headers)
+            r = requests.get(feed["url"], timeout=10, headers=hdrs)
             if r.status_code != 200:
                 return []
             data = r.json()
@@ -137,14 +117,11 @@ def fetch_chinese_rss(feed, max_results=8):
                         "link":   f"https://news.cnyes.com/news/id/{item.get('newsId','')}",
                     })
             return results[:max_results]
-
-        # Standard XML RSS
-        r = requests.get(feed["url"], timeout=10, headers=headers)
+        r = requests.get(feed["url"], timeout=10, headers=hdrs)
         if r.status_code != 200:
             return []
         root = ET.fromstring(r.content)
-        items = root.findall(".//item")[:30]
-        for item in items:
+        for item in root.findall(".//item")[:30]:
             title = item.findtext("title", "").strip()
             if any(kw in title for kw in RELEVANCE_KEYWORDS):
                 results.append({
@@ -154,287 +131,125 @@ def fetch_chinese_rss(feed, max_results=8):
                     "link":   item.findtext("link", ""),
                 })
         return results[:max_results]
-
     except Exception as e:
         print(f"  Feed error [{feed['name']}]: {e}")
         return []
 
-# ── Build sector news digest ───────────────────────────────
-def get_sector_news():
-    print("Scanning sector news (English + Chinese sources)...")
-    all_headlines = []
-    seen = set()
-
-    # English — Google News RSS
-    for query in SECTOR_QUERIES_EN:
-        for item in search_google_news_rss(query, max_results=3, lang="en"):
-            if item["title"] not in seen:
-                seen.add(item["title"])
-                item["lang"] = "EN"
-                all_headlines.append(item)
-
-    # Traditional Chinese — Google News RSS (TW)
-    for query in SECTOR_QUERIES_ZH:
-        for item in search_google_news_rss(query, max_results=3, lang="zh"):
-            if item["title"] not in seen:
-                seen.add(item["title"])
-                item["lang"] = "ZH"
-                all_headlines.append(item)
-
-    # Chinese financial RSS feeds
-    print("  Fetching Chinese financial sources...")
-    for feed in CHINESE_RSS_FEEDS:
-        print(f"    → {feed['name']}")
-        for item in fetch_chinese_rss(feed, max_results=5):
-            if item["title"] not in seen:
-                seen.add(item["title"])
-                item["lang"] = "ZH"
-                all_headlines.append(item)
-
-    if not all_headlines:
-        return "No significant sector news found today."
-
-    # Separate by language for clean formatting
-    en_news = [h for h in all_headlines if h.get("lang") == "EN"][:8]
-    zh_news = [h for h in all_headlines if h.get("lang") == "ZH"][:10]
-
-    lines = [f"**Sector News — CPO & Silicon Photonics ({today})**\n"]
-
-    if en_news:
-        lines.append("── English Sources ──")
-        for h in en_news:
-            lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
-
-    if zh_news:
-        lines.append("\n── 中文來源 (Chinese Sources) ──")
-        for h in zh_news:
-            lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
-
-    return "\n".join(lines), all_headlines
-
-# ── Earnings detection ────────────────────────────────────
-def get_earnings_digest():
-    print("Checking for earnings calls...")
-    results = []
-    seen = set()
-
-    for ticker, name_cn, name_en in COMPANIES:
-        # English queries
-        for query in [f"{name_en} earnings results 2025",
-                      f"Taiwan {ticker} quarterly results"]:
-            for item in search_google_news_rss(query, max_results=2, lang="en"):
-                t = item["title"].lower()
-                if any(kw in t for kw in ["earn","revenue","result","quarter","profit"]):
-                    if item["title"] not in seen:
-                        seen.add(item["title"])
-                        results.append({**item, "company": f"{ticker} {name_en} {name_cn}", "lang": "EN"})
-
-        # Chinese queries — 法說會, 營收
-        for query in [f"{name_cn} 法說會", f"{name_cn} 營收 {date.today().year}"]:
-            for item in search_google_news_rss(query, max_results=2, lang="zh"):
-                t = item["title"]
-                if any(kw in t for kw in ["法說","營收","獲利","EPS","季報","業績"]):
-                    if item["title"] not in seen:
-                        seen.add(item["title"])
-                        results.append({**item, "company": f"{ticker} {name_en} {name_cn}", "lang": "ZH"})
-
-    # Also check Chinese RSS feeds for earnings
-    for feed in CHINESE_RSS_FEEDS:
-        for item in fetch_chinese_rss(feed, max_results=10):
-            t = item["title"]
-            if any(kw in t for kw in ["法說","營收","獲利","EPS","季報"]):
-                if item["title"] not in seen:
-                    seen.add(item["title"])
-                    results.append({**item, "company": "sector", "lang": "ZH"})
-
-    if not results:
-        return "No earnings calls or quarterly results detected this week."
-
-    en_r = [r for r in results if r.get("lang") == "EN"][:5]
-    zh_r = [r for r in results if r.get("lang") == "ZH"][:8]
-
-    lines = [f"**Earnings & Results Digest ({today})**\n"]
-    if en_r:
-        lines.append("── English ──")
-        for r in en_r:
-            lines.append(f"- [{r['company']}] {r['title']}\n  {r['source']} | {r['date']}")
-    if zh_r:
-        lines.append("\n── 中文 (Chinese) ──")
-        for r in zh_r:
-            lines.append(f"- [{r['company']}] {r['title']}\n  {r['source']} | {r['date']}")
-    return "\n".join(lines)
-
-# ── Supply chain change detection ─────────────────────────
-def get_supply_chain_alerts():
-    print("Checking supply chain changes...")
-    results = []
-    seen = set()
-
-    sc_queries = [
-        "CPO supply chain win design Taiwan",
-        "上詮 SENKO customer order",
-        "聯亞 LiquidCool InP capacity",
-        "光聖 Radiant Opto Google contract",
-        "智邦 Accton NVIDIA switch",
-        "TSMC COUPE silicon photonics production",
-        "Taiwan optical component supplier change",
-    ]
-
-    for query in sc_queries:
-        items = search_google_news_rss(query, max_results=3)
-        for item in items:
-            if item["title"] not in seen:
-                seen.add(item["title"])
-                results.append(item)
-
-    if not results:
-        return "No supply chain changes detected today."
-
-    lines = [f"**Supply Chain Alerts ({today})**\n"]
-    for r in results[:8]:
-        lines.append(f"- {r['title']}\n  {r['source']} | {r['date']}")
-    return "\n".join(lines)
-
-# ── Push to Notion ─────────────────────────────────────────
 def push_to_notion(sector_news, earnings, supply_chain):
     notion_key = os.environ.get("NOTION_API_KEY")
     page_id    = os.environ.get("NOTION_PAGE_ID")
-
     if not notion_key or not page_id:
-        print("\n=== DIGEST OUTPUT (Notion not configured) ===\n")
-        print(sector_news)
-        print("\n" + earnings)
-        print("\n" + supply_chain)
+        print("Notion not configured — skipping")
         return
-
-    headers = {
+    hdrs = {
         "Authorization": f"Bearer {notion_key}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28",
     }
-
-    def h2(text):
-        return {"object": "block", "type": "heading_2",
-                "heading_2": {"rich_text": [{"type": "text",
-                               "text": {"content": text}}]}}
-
-    def para(text, bold=False):
-        return {"object": "block", "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text",
-                               "text": {"content": text},
-                               "annotations": {"bold": bold}}]}}
-
+    def h2(t):
+        return {"object":"block","type":"heading_2","heading_2":{"rich_text":[{"type":"text","text":{"content":t}}]}}
+    def para(t):
+        return {"object":"block","type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":t}}]}}
     def divider():
-        return {"object": "block", "type": "divider", "divider": {}}
-
+        return {"object":"block","type":"divider","divider":{}}
     blocks = [
-        h2(f"Daily Intelligence Digest — {today}"),
-        divider(),
-        para("SECTOR NEWS & CPO UPDATES", bold=True),
-        para(sector_news),
-        divider(),
-        para("EARNINGS CALL DIGEST", bold=True),
-        para(earnings),
-        divider(),
-        para("SUPPLY CHAIN CHANGE ALERTS", bold=True),
-        para(supply_chain),
-        divider(),
+        h2(f"Daily Intelligence Digest - {today}"), divider(),
+        para("SECTOR NEWS"), para(sector_news), divider(),
+        para("EARNINGS"), para(earnings), divider(),
+        para("SUPPLY CHAIN"), para(supply_chain), divider(),
     ]
-
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-    r = requests.patch(url, headers=headers, json={"children": blocks})
-    if r.status_code == 200:
-        print(f"Notion updated successfully for {today}")
-    else:
-        print(f"Notion error {r.status_code}: {r.text}")
+    r = requests.patch(url, headers=hdrs, json={"children": blocks})
+    print(f"Notion: {r.status_code}")
 
-# ── Main ───────────────────────────────────────────────────
 if __name__ == "__main__":
-    print(f"\n=== Daily News Pipeline (Free) — {today} ===\n")
+    print(f"\n=== Daily News Pipeline — {today} ===\n")
 
     all_headlines = []
     seen = set()
     en_news = []
     zh_news = []
 
-    print("Scanning sector news (English + Chinese sources)...")
+    print("Scanning English news...")
     for query in SECTOR_QUERIES_EN:
         for item in search_google_news_rss(query, max_results=3, lang="en"):
             if item["title"] not in seen:
                 seen.add(item["title"])
                 item["lang"] = "EN"
+                item["category"] = "sector"
                 en_news.append(item)
                 all_headlines.append(item)
 
+    print("Scanning Chinese news...")
     for query in SECTOR_QUERIES_ZH:
         for item in search_google_news_rss(query, max_results=3, lang="zh"):
             if item["title"] not in seen:
                 seen.add(item["title"])
                 item["lang"] = "ZH"
+                item["category"] = "sector"
                 zh_news.append(item)
                 all_headlines.append(item)
 
-    print("  Fetching Chinese financial sources...")
+    print("Fetching Chinese RSS feeds...")
     for feed in CHINESE_RSS_FEEDS:
-        print(f"    -> {feed['name']}")
+        print(f"  -> {feed['name']}")
         for item in fetch_chinese_rss(feed, max_results=5):
             if item["title"] not in seen:
                 seen.add(item["title"])
                 item["lang"] = "ZH"
+                item["category"] = "sector"
                 zh_news.append(item)
                 all_headlines.append(item)
 
-    lines = [f"**Sector News — CPO & Silicon Photonics ({today})**\n"]
-    if en_news:
-        lines.append("-- English Sources --")
-        for h in en_news[:8]:
-            lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
-    if zh_news:
-        lines.append("\n-- Chinese Sources --")
-        for h in zh_news[:10]:
-            lines.append(f"- {h['title']}\n  {h['source']} | {h['date']}")
+    print("Scanning supply chain news...")
+    for query in SC_QUERIES:
+        for item in search_google_news_rss(query, max_results=3):
+            if item["title"] not in seen:
+                seen.add(item["title"])
+                item["lang"] = "EN"
+                item["category"] = "supply_chain"
+                all_headlines.append(item)
+
+    print("Scanning earnings news...")
+    for ticker, name_cn, name_en in COMPANIES:
+        for query in [f"{name_cn} 法說會", f"{name_cn} 營收 {date.today().year}"]:
+            for item in search_google_news_rss(query, max_results=2, lang="zh"):
+                t = item["title"]
+                if any(kw in t for kw in ["法說","營收","獲利","EPS","季報"]):
+                    if item["title"] not in seen:
+                        seen.add(item["title"])
+                        item["lang"] = "ZH"
+                        item["category"] = "earnings"
+                        all_headlines.append(item)
+
+    # Build digest strings
+    lines = [f"Sector News - CPO & Silicon Photonics ({today})"]
+    for h in en_news[:8]:
+        lines.append(f"- {h['title']} | {h['source']}")
+    for h in zh_news[:8]:
+        lines.append(f"- {h['title']} | {h['source']}")
     sector_news = "\n".join(lines)
+    earnings_str = "See news feed for earnings updates."
+    supply_str   = "See news feed for supply chain updates."
 
-    earnings     = get_earnings_digest()
-    supply_chain = get_supply_chain_alerts()
+    push_to_notion(sector_news, earnings_str, supply_str)
 
-    push_to_notion(sector_news, earnings, supply_chain)
-
+    # Write to Supabase
     from supabase_writer import write_news, log_pipeline
 
     news_rows = []
     for item in all_headlines:
         news_rows.append({
-            "title":        item.get("title", ""),
+            "title":        item.get("title", "")[:500],
             "source":       item.get("source", ""),
             "lang":         item.get("lang", "EN"),
-            "category":     "sector",
+            "category":     item.get("category", "sector"),
             "published_at": item.get("date", today),
             "link":         item.get("link", ""),
         })
 
-    for query in [
-        "CPO supply chain win design Taiwan",
-        "上詮 SENKO customer order",
-        "聯亞 LiquidCool InP capacity",
-        "光聖 Radiant Opto Google contract",
-        "智邦 Accton NVIDIA switch",
-        "TSMC COUPE silicon photonics production",
-    ]:
-        for item in search_google_news_rss(query, max_results=3):
-            if item["title"] not in seen:
-                seen.add(item["title"])
-                news_rows.append({
-                    "title":        item.get("title", ""),
-                    "source":       item.get("source", ""),
-                    "lang":         "EN",
-                    "category":     "supply_chain",
-                    "published_at": item.get("date", today),
-                    "link":         item.get("link", ""),
-                })
-
     write_news(news_rows)
-    log_pipeline("Daily News", "success", f"{len(news_rows)} items fetched")
+    log_pipeline("Daily News", "success", f"{len(news_rows)} items")
 
-    print(f"\nTotal news items: {len(news_rows)}")
-    print("\nDone.")
+    print(f"\nTotal: {len(news_rows)} news items written to Supabase")
+    print("Done.")
