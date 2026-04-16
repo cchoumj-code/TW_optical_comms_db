@@ -201,6 +201,7 @@ def upsert_financials(ticker, annual, quarterly):
     print(f"  {ticker}: financials -> {r.status_code} ({len(rows)} rows)")
 
 def push_company_profile(ticker, filepath):
+    """Parse business description and supply chain from .md file."""
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -212,9 +213,9 @@ def push_company_profile(ticker, filepath):
                 items.append(line[2:].strip())
         return items[:10]
 
-    # Business description — first non-header paragraphs
+    # Business description
     overview_match = re.search(
-        r"## Business Overview[^\n]*\n(.*?)(?=\n##)", 
+        r"## Business Overview[^\n]*\n(.*?)(?=\n##)",
         content, re.DOTALL
     )
     en_desc, zh_desc = "", ""
@@ -226,7 +227,7 @@ def push_company_profile(ticker, filepath):
 
     # Supply chain
     sc_match = re.search(
-        r"## Supply Chain Position[^\n]*\n(.*?)(?=\n##)", 
+        r"## Supply Chain Position[^\n]*\n(.*?)(?=\n##)",
         content, re.DOTALL
     )
     upstream, downstream, role = [], [], ""
@@ -241,39 +242,39 @@ def push_company_profile(ticker, filepath):
 
     # Key customers
     cust_match = re.search(
-        r"### Key Customers[^\n]*\n(.*?)(?=###|##|\Z)", 
+        r"### Key Customers[^\n]*\n(.*?)(?=###|##|\Z)",
         content, re.DOTALL
     )
     key_customers = extract_bullets(cust_match.group(1)) if cust_match else []
 
     # Key suppliers
     supp_match = re.search(
-        r"### Key Suppliers[^\n]*\n(.*?)(?=###|##|\Z)", 
+        r"### Key Suppliers[^\n]*\n(.*?)(?=###|##|\Z)",
         content, re.DOTALL
     )
     key_suppliers = extract_bullets(supp_match.group(1)) if supp_match else []
 
     # Investment themes
     theme_match = re.search(
-        r"### Key Investment Themes[^\n]*\n(.*?)(?=###|##|\Z)", 
+        r"### Key Investment Themes[^\n]*\n(.*?)(?=###|##|\Z)",
         content, re.DOTALL
     )
     investment_themes = extract_bullets(theme_match.group(1)) if theme_match else []
 
     profile = {
-        "business_desc":     en_desc[:1000]  if en_desc  else None,
-        "business_desc_zh":  zh_desc[:1000]  if zh_desc  else None,
-        "upstream":          upstream         if upstream  else None,
-        "downstream":        downstream       if downstream else None,
-        "midstream_role":    role[:200]       if role      else None,
-        "key_customers":     key_customers    if key_customers else None,
-        "key_suppliers":     key_suppliers    if key_suppliers else None,
-        "investment_themes": investment_themes if investment_themes else None,
+        "business_desc":     en_desc[:1000]   if en_desc            else None,
+        "business_desc_zh":  zh_desc[:1000]   if zh_desc            else None,
+        "upstream":          upstream          if upstream           else None,
+        "downstream":        downstream        if downstream         else None,
+        "midstream_role":    role[:200]        if role               else None,
+        "key_customers":     key_customers     if key_customers      else None,
+        "key_suppliers":     key_suppliers     if key_suppliers      else None,
+        "investment_themes": investment_themes if investment_themes  else None,
     }
 
     clean = {k: v for k, v in profile.items() if v is not None}
     if not clean:
-        print(f"  {ticker}: no profile data")
+        print(f"  {ticker}: no profile data found")
         return
 
     url = f"{SUPABASE_URL}/rest/v1/stock_data?ticker=eq.{ticker}"
@@ -315,6 +316,7 @@ if __name__ == "__main__":
             print(f"  Gross margin: {data['annual']['gross_margin']}")
             update_stock_data(ticker, data["summary"])
             upsert_financials(ticker, data["annual"], data["quarterly"])
+            push_company_profile(ticker, filepath)
             success += 1
         except Exception as e:
             import traceback
