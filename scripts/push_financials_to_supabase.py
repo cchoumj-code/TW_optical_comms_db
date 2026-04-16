@@ -200,6 +200,91 @@ def upsert_financials(ticker, annual, quarterly):
     )
     print(f"  {ticker}: financials -> {r.status_code} ({len(rows)} rows)")
 
+def push_company_profile(ticker, filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    def extract_bullets(section_text):
+        items = []
+        for line in section_text.split("\n"):
+            line = line.strip()
+            if line.startswith("- "):
+                items.append(line[2:].strip())
+        return items[:10]
+
+    # Business description — first non-header paragraphs
+    overview_match = re.search(
+        r"## Business Overview[^\n]*\n(.*?)(?=\n##)", 
+        content, re.DOTALL
+    )
+    en_desc, zh_desc = "", ""
+    if overview_match:
+        paras = [l.strip() for l in overview_match.group(1).split("\n")
+                 if l.strip() and not l.startswith("**")]
+        en_desc = paras[0] if paras else ""
+        zh_desc = paras[1] if len(paras) > 1 else ""
+
+    # Supply chain
+    sc_match = re.search(
+        r"## Supply Chain Position[^\n]*\n(.*?)(?=\n##)", 
+        content, re.DOTALL
+    )
+    upstream, downstream, role = [], [], ""
+    if sc_match:
+        sc = sc_match.group(1)
+        up = re.search(r"\*\*Upstream[^*]*\*\*[^\n]*\n(.*?)(?=\*\*Mid|\*\*Down|\Z)", sc, re.DOTALL)
+        dn = re.search(r"\*\*Downstream[^*]*\*\*[^\n]*\n(.*?)(?=\n\n|##|\Z)", sc, re.DOTALL)
+        rl = re.search(r"\*\*Midstream[^*]*\*\*[^\n]*\n-[^*]*\*\*[^—]*—\s*([^\n]+)", sc)
+        upstream   = extract_bullets(up.group(1)) if up else []
+        downstream = extract_bullets(dn.group(1)) if dn else []
+        role       = rl.group(1).strip()          if rl else ""
+
+    # Key customers
+    cust_match = re.search(
+        r"### Key Customers[^\n]*\n(.*?)(?=###|##|\Z)", 
+        content, re.DOTALL
+    )
+    key_customers = extract_bullets(cust_match.group(1)) if cust_match else []
+
+    # Key suppliers
+    supp_match = re.search(
+        r"### Key Suppliers[^\n]*\n(.*?)(?=###|##|\Z)", 
+        content, re.DOTALL
+    )
+    key_suppliers = extract_bullets(supp_match.group(1)) if supp_match else []
+
+    # Investment themes
+    theme_match = re.search(
+        r"### Key Investment Themes[^\n]*\n(.*?)(?=###|##|\Z)", 
+        content, re.DOTALL
+    )
+    investment_themes = extract_bullets(theme_match.group(1)) if theme_match else []
+
+    profile = {
+        "business_desc":     en_desc[:1000]  if en_desc  else None,
+        "business_desc_zh":  zh_desc[:1000]  if zh_desc  else None,
+        "upstream":          upstream         if upstream  else None,
+        "downstream":        downstream       if downstream else None,
+        "midstream_role":    role[:200]       if role      else None,
+        "key_customers":     key_customers    if key_customers else None,
+        "key_suppliers":     key_suppliers    if key_suppliers else None,
+        "investment_themes": investment_themes if investment_themes else None,
+    }
+
+    clean = {k: v for k, v in profile.items() if v is not None}
+    if not clean:
+        print(f"  {ticker}: no profile data")
+        return
+
+    url = f"{SUPABASE_URL}/rest/v1/stock_data?ticker=eq.{ticker}"
+    r = requests.patch(
+        url,
+        headers={**headers(), "Prefer": "return=minimal"},
+        json=clean
+    )
+    print(f"  {ticker}: profile -> {r.status_code} ({len(clean)} fields)")
+
+
 if __name__ == "__main__":
     print("\n=== Push Financials to Supabase ===\n")
 
